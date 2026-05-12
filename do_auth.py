@@ -565,8 +565,14 @@ def main():
         sys.exit(1)
 
     if (av_pairs[0] == "service=shell\n"):
+        # NV (NVIDIA) switch: protocol=ssh precedes cmd=
+        if av_pairs[1].startswith("protocol=") and len(av_pairs) > 2 and av_pairs[2] == "cmd=\n":
+            if len(av_pairs) > 3:
+                log.debug('NV pairs found')
+                return_pairs = av_pairs[3:] # strip "protocol=" and "cmd=" for consistency
+
         # $**@ Nexus!
-        if av_pairs[1] == ("cmd=\n"): # #&*@ Nexus!
+        elif av_pairs[1] == ("cmd=\n"): # #&*@ Nexus!
             if len(av_pairs) > 2:
                 # DEBUG
                 log.debug('Nexus pairs found')
