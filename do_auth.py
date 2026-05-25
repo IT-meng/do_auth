@@ -282,6 +282,18 @@ if DEBUG:
 # comma-separated attribute value! This will be addressed generally in v2.0!
 SKIP_CONVERT = ['user-permissions']
 
+# NV (NVIDIA) switch conditional AV pair mapping.
+# Format: {trigger_attr: {trigger_value: {target_attr: new_value, ...}, ...}, ...}
+# When a trigger attribute is found with a matching value, the target attributes
+# in the same return_pairs list are replaced with the specified new values.
+# Values are compared after stripping surrounding quotes (single or double).
+NV_AV_PAIR_MAP = {
+    'shell:roles': {
+        'network-operator': {'priv-lvl': '7'},
+        'network-admin':    {'priv-lvl': '15'},
+    },
+}
+
 
 # Functions
 def _setup_logging(filename=LOG_FILE, format=LOG_FORMAT, level=LOG_LEVEL):
@@ -398,6 +410,59 @@ def match_it(the_section, the_option, match_item, config, filename):
             if re.match(item, match_item):
                 return True
     return False
+
+def apply_nv_av_pair_modifications(return_pairs):
+    """
+    Apply NV (NVIDIA) switch conditional AV pair modifications.
+
+    Scans return_pairs for trigger attributes defined in ``NV_AV_PAIR_MAP``.
+    When a trigger attribute's value (after stripping surrounding quotes)
+    matches, the corresponding target attributes are replaced with the
+    specified new values.
+
+    :param return_pairs:
+        List of AV pair strings (e.g. ``["priv-lvl=15\\n", "shell:roles=network-operator\\n"]``)
+    :returns:
+        Modified list of AV pair strings with original line endings preserved.
+    """
+    # Parse return_pairs into an ordered dict for lookup & modification
+    pair_dict = {}
+    pair_order = []
+    for item in return_pairs:
+        splt = item.split('=', 1)  # maxsplit=1 handles values containing '='
+        if len(splt) == 2:
+            attr = splt[0].strip()
+            value = splt[1].rstrip('\n')
+            pair_dict[attr] = value
+            pair_order.append(attr)
+        else:
+            # Non-standard items (bare newlines, etc.) kept as-is
+            pair_order.append(item)
+
+    # Apply conditional modifications from NV_AV_PAIR_MAP
+    for trigger_attr, value_map in NV_AV_PAIR_MAP.items():
+        if trigger_attr in pair_dict:
+            # Strip surrounding quotes for comparison
+            trigger_value = pair_dict[trigger_attr].strip('\'"')
+            if trigger_value in value_map:
+                modifications = value_map[trigger_value]
+                log.debug('NV AV pair modification triggered: %s=%s -> %r'
+                          % (trigger_attr, trigger_value, modifications))
+                for target_attr, new_value in modifications.items():
+                    if target_attr in pair_dict:
+                        log.debug('NV replacing %s=%s with %s=%s'
+                                  % (target_attr, pair_dict[target_attr], target_attr, new_value))
+                        pair_dict[target_attr] = new_value
+
+    # Rebuild return_pairs preserving original order and line endings
+    new_return_pairs = []
+    for entry in pair_order:
+        if entry in pair_dict:
+            new_return_pairs.append('%s=%s\n' % (entry, pair_dict[entry]))
+        else:
+            new_return_pairs.append(entry)
+
+    return new_return_pairs
 
 class DoAuthOptionParser(optparse.OptionParser):
     """
@@ -570,6 +635,7 @@ def main():
             if len(av_pairs) > 3:
                 log.debug('NV pairs found')
                 return_pairs = av_pairs[3:] # strip "protocol=" and "cmd=" for consistency
+                return_pairs = apply_nv_av_pair_modifications(return_pairs)
 
         # $**@ Nexus!
         elif av_pairs[1] == ("cmd=\n"): # #&*@ Nexus!
